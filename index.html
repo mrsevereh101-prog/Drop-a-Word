@@ -174,7 +174,8 @@ h2{font-family:Bungee,Impact,sans-serif;font-weight:400;font-size:1rem;margin:0 
       <h2>How to play</h2>
       <ul class="rules">
         <li>The <b>conveyor</b> shows the word being sent down, one letter at a time.</li>
-        <li>Spell any word of <b>3+ letters</b> left to right, or up and down.</li>
+        <li>Spell a word of <b>3+ letters</b> left to right, or up or down a column.</li>
+        <li>Words of <b>4+ letters</b> also count backwards across and on <b>diagonals</b>. Diagonal words score <b>×1.5</b>.</li>
         <li>Longer words score more. Clearing one word that makes another is a <b>chain</b>.</li>
         <li>If blocks stack to the top of the loom, the shift is over.</li>
       </ul>
@@ -350,36 +351,45 @@ function drop(){if(!live())return;const p=g.piece;while(free(p.r+1,p.c))p.r++;la
 function step(){const p=g.piece;if(free(p.r+1,p.c)){p.r++;render()}else land()}
 function land(){const p=g.piece;g.board[p.r][p.c]={ch:p.ch,k:p.k};g.piece=null;render();resolve(1)}
 
-// Words read left→right along rows, or top→bottom / bottom→top down columns.
+// Across (left→right) and down/up columns count from 3 letters.
+// Backwards across and both diagonals, in either direction, need 4+ so short words don't clear by accident.
+const MIN=3, MIN_HARD=4, DIAG_BONUS=1.5;
 function find(){
-  const hits=new Set(), found=[];
-  const scan=(cells,both)=>{
+  const hits=new Set(), found=new Map();
+  const scan=(cells,fwdMin,revMin,diag)=>{
     let run=[];
     const flush=()=>{
       const s=run.map(x=>g.board[x[0]][x[1]].ch).join("");
-      for(let a=0;a<run.length;a++)for(let b=a+3;b<=run.length;b++){
-        const sub=s.slice(a,b), rev=[...sub].reverse().join("");
-        const w=DICT.has(sub)?sub:(both&&DICT.has(rev)?rev:null);
-        if(w){found.push(w);for(let k=a;k<b;k++)hits.add(run[k].join(","))}
+      for(let a=0;a<run.length;a++)for(let b=a+MIN;b<=run.length;b++){
+        const sub=s.slice(a,b), rev=[...sub].reverse().join(""), n=b-a;
+        const w=n>=fwdMin&&DICT.has(sub)?sub:(n>=revMin&&DICT.has(rev)?rev:null);
+        if(w){found.set(w,found.get(w)||diag);for(let k=a;k<b;k++)hits.add(run[k].join(","))}
       }
       run=[];
     };
     cells.forEach(x=>{g.board[x[0]][x[1]]?run.push(x):flush()});flush();
   };
-  for(let r=0;r<ROWS;r++)scan([...Array(COLS)].map((_,c)=>[r,c]),false);
-  for(let c=0;c<COLS;c++)scan([...Array(ROWS)].map((_,r)=>[r,c]),true);
-  return {hits,found:[...new Set(found)]};
+  for(let r=0;r<ROWS;r++)scan([...Array(COLS)].map((_,c)=>[r,c]),MIN,MIN_HARD,false);
+  for(let c=0;c<COLS;c++)scan([...Array(ROWS)].map((_,r)=>[r,c]),MIN,MIN,false);
+  // ↘ diagonals start on the top row or left column; ↙ on the top row or right column.
+  for(let s=-(COLS-1);s<ROWS;s++){
+    const dn=[],up=[];
+    for(let r=0;r<ROWS;r++){const c1=r-s,c2=COLS-1-(r-s);if(c1>=0&&c1<COLS)dn.push([r,c1]);if(c2>=0&&c2<COLS)up.push([r,c2])}
+    if(dn.length>=MIN_HARD)scan(dn,MIN_HARD,MIN_HARD,true);
+    if(up.length>=MIN_HARD)scan(up,MIN_HARD,MIN_HARD,true);
+  }
+  return {hits,found:[...found].map(([w,diag])=>({w,diag}))};
 }
 function resolve(chain){
   const {hits,found}=find();
   if(!hits.size){g.busy=false;spawn();return}
   g.busy=true;
-  const pts=found.reduce((t,w)=>t+w.length*w.length*10,0)*chain;
+  const pts=Math.round(found.reduce((t,{w,diag})=>t+w.length*w.length*10*(diag?DIAG_BONUS:1),0)*chain);
   g.score+=pts;
   const shelf=$("found");shelf.querySelector(".empty")?.remove();
-  found.forEach(w=>{g.words.push(w);const box=el("span","word");box.title=w;box.setAttribute("aria-label",w);
+  found.forEach(({w})=>{g.words.push(w);const box=el("span","word");box.title=w;box.setAttribute("aria-label",w);
     [...w].forEach((ch,i)=>box.appendChild(el("span","blk k"+(i%6),ch)));shelf.prepend(box)});
-  $("flash").textContent=`${found.join(" + ")}  +${pts}${chain>1?`  · chain ×${chain}`:""}`;
+  $("flash").textContent=`${found.map(f=>f.diag?f.w+" ↗":f.w).join(" + ")}  +${pts}${chain>1?`  · chain ×${chain}`:""}`;
   try{navigator.vibrate&&navigator.vibrate(30)}catch{}
   const cells=$("well").children;
   hits.forEach(h=>{const [r,c]=h.split(",").map(Number);cells[r*COLS+c].classList.add("pop")});
